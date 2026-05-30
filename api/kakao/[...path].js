@@ -4,8 +4,8 @@ export default async function handler(req, res) {
     return res.status(500).json({ ok: false, error: 'KAKAO_REST_API_KEY is not set.' });
   }
 
-  const pathParam = req.query.path;
-  let path = Array.isArray(pathParam) ? pathParam.join('/') : String(pathParam || '');
+  const urlObj = new URL(req.url, `https://${req.headers.host}`);
+  let path = urlObj.pathname.replace('/api/kakao/', '').replace(/^\/+|\/+$/g, '');
 
   if (path === 'category') path = 'search/category';
   if (path === 'search') path = 'search/keyword';
@@ -23,13 +23,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ ok: false, error: 'Unsupported Kakao Local API path.', path });
   }
 
-  const params = new URLSearchParams();
-
-  for (const [k, v] of Object.entries(req.query)) {
-    if (k === 'path') continue;
-    if (Array.isArray(v)) v.forEach(x => params.append(k, x));
-    else if (v !== undefined) params.set(k, v);
-  }
+  const params = new URLSearchParams(urlObj.searchParams);
 
   if (path === 'search/keyword' && !params.get('query')) {
     params.set('query', '국민대학교 카페');
@@ -39,10 +33,10 @@ export default async function handler(req, res) {
     params.set('size', '5');
   }
 
-  const url = `https://dapi.kakao.com/v2/local/${path}.json?${params.toString()}`;
+  const kakaoUrl = `https://dapi.kakao.com/v2/local/${path}.json?${params.toString()}`;
 
   try {
-    const upstream = await fetch(url, {
+    const upstream = await fetch(kakaoUrl, {
       headers: { Authorization: `KakaoAK ${key}` }
     });
 
