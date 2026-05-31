@@ -95,7 +95,8 @@ function drawRoute(mode){
 const KAKAO_CATEGORY_CODES={restaurant:['FD6'],cafe:['CE7'],convenience:['CS2'],medical:['HP8','PM9'],bank:['BK9'],transit:['SW8'],school:['SC4','AC5'],shopping:['MT1'],public:['PO3']};
 const KAKAO_KEYWORDS={transit:['국민대학교 버스정류장','정릉 버스정류장'],public:['국민대학교 주민센터','정릉 우체국','정릉 경찰서'],shopping:['국민대학교 마트','정릉 시장','정릉 쇼핑'],restaurant:['국민대학교 음식점'],cafe:['국민대학교 카페'],medical:['국민대학교 병원','국민대학교 약국'],bank:['국민대학교 은행'],convenience:['국민대학교 편의점']};
 async function kakaoFetch(path,params){
-  const url='/api/kakao/'+path+'?'+new URLSearchParams(params).toString();
+  const apiPath=path.replace(/^search\//,'');
+  const url='/api/kakao/'+apiPath+'?'+new URLSearchParams(params).toString();
   const r=await fetch(url);
   if(!r.ok){
     const msg=await r.text().catch(()=>'');
