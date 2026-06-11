@@ -23,11 +23,8 @@
 <script>
 const KMU={name:'국민대학교',addr:'서울 성북구 정릉로 77',lat:37.61095,lng:126.99762};
 const BUSINESS_HALL={name:'국민대학교 경영관',lat:37.60925,lng:126.99855,radius:2100};
-const ORS_API_KEY='eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImYyOTIwYjE3Mjg2MjQ0MzI4MGUxY2ZmYTgwMmY5MTRlIiwiaCI6Im11cm11cjY0In0=';
-// Kakao REST API key is kept on the serverless API side, not in the browser.
-const KAKAO_REST_API_KEY='';
+// ORS / Kakao / Seoul Bike API keys are kept on the serverless API side, not in the browser.
 const KAKAO_SEARCH_RADIUS=2100;
-const SEOUL_BIKE_API_KEY='sample';
 const BIKE_SEARCH_RADIUS=2500;
 const bikeStations=[];
 const C={all:['전체','#1167d8','◎'],restaurant:['식당','#f97316','🍴'],cafe:['카페','#8b5a2b','☕'],convenience:['편의점','#16a34a','▣'],transit:['교통','#2563eb','🚌'],medical:['병원','#ef4444','✚'],bank:['은행','#059669','₩'],school:['학교','#7c3aed','🎓'],public:['공공기관','#0f766e','▥'],shopping:['쇼핑','#9333ea','🛍'],bike:['따릉이','#0ea5e9','🚲']};
@@ -41,32 +38,15 @@ function fallbackLine(p,mode){const midLat=(KMU.lat+p.lat)/2, midLng=(KMU.lng+p.
 function fallback(p){const walkDist=p.straight*1.28;const driveDist=p.straight*1.42;return {walkDist:walkDist,walkTime:Math.max(90,walkDist/1.25),driveDist:driveDist,driveTime:Math.max(180,driveDist/8.3+180),walkGeom:fallbackLine(p,'walk'),geometry:fallbackLine(p,'drive'),estimated:true}}
 function transitEstimate(p){const d=p.straight;if(d<900)return {time:Math.max(4,Math.round((d/1.25)/60)),label:'도보 권장'};let min=Math.round(7+d/180);if(d>2500)min=Math.round(10+d/260);return {time:min,label:'대중교통 예상'}}
 async function osrm(profile,p){
+  // 경로 계산은 서버 프록시(/api/route)를 경유 — 엣지 캐싱 + ORS 키 비노출.
   const orsProfile=profile==='foot'?'foot-walking':'driving-car';
-  const url=`https://api.openrouteservice.org/v2/directions/${orsProfile}/geojson`;
-  const r=await fetch(url,{
-    method:'POST',
-    headers:{
-      'Authorization':ORS_API_KEY,
-      'Content-Type':'application/json',
-      'Accept':'application/json, application/geo+json'
-    },
-    body:JSON.stringify({
-      coordinates:[[KMU.lng,KMU.lat],[p.lng,p.lat]],
-      instructions:false,
-      units:'m'
-    })
-  });
+  const r=await fetch(`/api/route?profile=${orsProfile}&lng=${p.lng}&lat=${p.lat}`);
   if(!r.ok)throw new Error('ORS route failed');
   const j=await r.json();
-  const f=j.features&&j.features[0];
-  if(!f||!f.properties||!f.properties.summary)throw new Error('no ORS route');
-  return {
-    distance:f.properties.summary.distance,
-    duration:f.properties.summary.duration,
-    geometry:{coordinates:f.geometry.coordinates}
-  };
+  if(!j.ok||!j.geometry)throw new Error(j.error||'no ORS route');
+  return j;
 }
-async function getRoute(p){if(routeCache[p.id])return routeCache[p.id];showLoad(true);let out=fallback(p);try{const drive=await osrm('driving',p);out.driveDist=drive.distance;out.driveTime=drive.duration;out.geometry=drive.geometry.coordinates.map(x=>[x[1],x[0]])}catch(e){}try{const walk=await osrm('foot',p);out.walkDist=walk.distance;out.walkTime=walk.duration;out.walkGeom=walk.geometry.coordinates.map(x=>[x[1],x[0]])}catch(e){}routeCache[p.id]=out;showLoad(false);return out}
+async function getRoute(p){if(routeCache[p.id])return routeCache[p.id];showLoad(true);let out=fallback(p);const [drive,walk]=await Promise.allSettled([osrm('driving',p),osrm('foot',p)]);if(drive.status==='fulfilled'){out.driveDist=drive.value.distance;out.driveTime=drive.value.duration;out.geometry=drive.value.geometry.coordinates.map(x=>[x[1],x[0]])}if(walk.status==='fulfilled'){out.walkDist=walk.value.distance;out.walkTime=walk.value.duration;out.walkGeom=walk.value.geometry.coordinates.map(x=>[x[1],x[0]])}routeCache[p.id]=out;showLoad(false);return out}
 function showLoad(v){document.getElementById('loading').classList.toggle('show',v)}
 function pin(cat,sel=false){const color=C[cat]?.[1]||'#475569',icon=C[cat]?.[2]||'•';return L.divIcon({className:'',html:`<div class="pin ${sel?'selected':''}" style="background:${color}">${icon}</div>`,iconSize:[sel?42:30,sel?42:30],iconAnchor:[sel?21:15,sel?21:15]})}
 function kmuPin(){return L.divIcon({className:'',html:'<div class="pin kmu">🎓</div>',iconSize:[40,40],iconAnchor:[20,20]})}
@@ -92,18 +72,6 @@ function drawRoute(mode){
 }
 
 
-const KAKAO_CATEGORY_CODES={restaurant:['FD6'],cafe:['CE7'],convenience:['CS2'],medical:['HP8','PM9'],bank:['BK9'],transit:['SW8'],school:['SC4','AC5'],shopping:['MT1'],public:['PO3']};
-const KAKAO_KEYWORDS={transit:['국민대학교 버스정류장','정릉 버스정류장'],public:['국민대학교 주민센터','정릉 우체국','정릉 경찰서'],shopping:['국민대학교 마트','정릉 시장','정릉 쇼핑'],restaurant:['국민대학교 음식점'],cafe:['국민대학교 카페'],medical:['국민대학교 병원','국민대학교 약국'],bank:['국민대학교 은행'],convenience:['국민대학교 편의점']};
-async function kakaoFetch(path,params){
-  const apiPath=path.replace(/^search\//,'');
-  const url='/api/kakao/'+apiPath+'?'+new URLSearchParams(params).toString();
-  const r=await fetch(url);
-  if(!r.ok){
-    const msg=await r.text().catch(()=>'');
-    throw new Error(`Kakao API failed ${r.status}: ${msg}`);
-  }
-  return await r.json();
-}
 function setApiStatus(msg){
   const el=document.getElementById('apiStatus');
   if(el)el.textContent=msg;
@@ -116,36 +84,16 @@ async function loadKakaoPlaces(){
   showLoad(true);
   document.getElementById('loading').textContent='카카오 장소 불러오는 중...';
   setApiStatus('카카오 Local API에서 장소 정보를 불러오는 중입니다...');
-  const found=[];
-  const errors=[];
-  const center={x:BUSINESS_HALL.lng,y:BUSINESS_HALL.lat,radius:KAKAO_SEARCH_RADIUS,sort:'distance',size:15};
-
-  for(const [cat,codes] of Object.entries(KAKAO_CATEGORY_CODES)){
-    for(const code of codes){
-      for(let page=1;page<=3;page++){
-        try{
-          const j=await kakaoFetch('search/category',{...center,category_group_code:code,page});
-          (j.documents||[]).forEach(d=>found.push(kakaoToPlace(d,cat)));
-          if(j.meta&&j.meta.is_end)break;
-        }catch(e){
-          console.warn('Kakao category failed', cat, code, e);
-          errors.push(`${cat}/${code}`);
-          break;
-        }
-      }
-    }
-  }
-
-  for(const [cat,queries] of Object.entries(KAKAO_KEYWORDS)){
-    for(const query of queries){
-      try{
-        const j=await kakaoFetch('search/keyword',{...center,query,page:1,size:15});
-        (j.documents||[]).forEach(d=>found.push(kakaoToPlace(d,cat)));
-      }catch(e){
-        console.warn('Kakao keyword failed', cat, query, e);
-        errors.push(`${cat}/${query}`);
-      }
-    }
+  // 카테고리/키워드 검색은 서버(/api/places)가 카카오를 병렬 호출해 집계 — 브라우저는 1회 왕복.
+  let found=[];
+  try{
+    const r=await fetch('/api/places');
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.ok===false)throw new Error(j.error||('places API failed '+r.status));
+    found=(j.documents||[]).map(d=>kakaoToPlace(d,d.cat));
+    if(j.errors)console.warn('Kakao partial failures',j.errors);
+  }catch(e){
+    console.warn('Kakao places failed',e);
   }
 
   const uniq=new Map();
@@ -176,7 +124,9 @@ async function loadKakaoPlaces(){
 async function bikeFetch(){
   // 따릉이 실시간 정보는 로컬 프록시 서버를 통해 호출합니다.
   // 브라우저에서 서울시 API를 직접 호출하면 http/https, CORS, 샘플키 제한 때문에 실패하거나 일부만 보일 수 있습니다.
-  const localUrl='/api/seoul-bike';
+  // 서버에서 경영관 기준 반경으로 필터링해 서울 전역(~2,800개) 대신 주변 대여소만 받는다.
+  // (+500m: 반경 끝자락 장소에서 가까운 대여소까지 커버)
+  const localUrl=`/api/seoul-bike?lat=${BUSINESS_HALL.lat}&lng=${BUSINESS_HALL.lng}&radius=${BIKE_SEARCH_RADIUS+500}`;
   const r=await fetch(localUrl);
   const j=await r.json().catch(()=>({}));
   if(!r.ok||j.ok===false){
@@ -266,8 +216,8 @@ function naverUrl(p,mode='walk'){return `https://map.naver.com/v5/directions/${K
 function naverTransitUrl(p){return naverUrl(p,'transit')}
 function kakaoUrl(p){return `https://map.kakao.com/link/from/${encodeURIComponent('국민대학교')},${KMU.lat},${KMU.lng}/to/${encodeURIComponent(p.name)},${p.lat},${p.lng}`}
 async function selectPlace(p){selected=p;routeMode='walk';renderMarkers(filtered());map.setView([p.lat,p.lng],16,{animate:true});document.getElementById('panel').classList.add('show');document.getElementById('pName').textContent=p.name;document.getElementById('pMeta').innerHTML=`${C[p.cat][2]} ${C[p.cat][0]} · ${p.addr}${p.phone?' · '+p.phone:''}${p.source==='kakao'?' · Kakao Local API':''}${p.source==='seoulbike'?' · 대여 가능 '+p.available+'대':''}<br>국민대학교 기준 경로 계산`;document.getElementById('pDist').textContent='계산 중';document.getElementById('pWalk').textContent='계산 중';document.getElementById('pDrive').textContent='계산 중';document.getElementById('pReco').textContent='계산 중';document.getElementById('walkMode').classList.add('active');document.getElementById('driveMode').classList.remove('active');document.getElementById('modeHint').textContent='도보/차량/따릉이 버튼을 누르면 상세 정보가 표시됩니다.';document.getElementById('bikeInfo').style.display='none';document.getElementById('naver').href=naverUrl(p,'walk');document.getElementById('naverapp').href=`nmap://route/walk?slat=${KMU.lat}&slng=${KMU.lng}&sname=${encodeURIComponent('국민대학교')}&dlat=${p.lat}&dlng=${p.lng}&dname=${encodeURIComponent(p.name)}&appname=kmu.infra.app`;document.getElementById('kakao').href=kakaoUrl(p);let r=await getRoute(p);if(selected.id!==p.id)return;const walkSec=Math.max(90,r.walkTime||0);const driveSec=Math.max(180,r.driveTime||0);document.getElementById('pWalk').textContent=fmtWalk(walkSec);const driveText=fmtDrive(driveSec,walkSec);document.getElementById('pDrive').textContent=driveText;const reco=recommendMode(walkSec,driveSec);document.getElementById('pReco').textContent=reco.text;drawRoute(reco.mode==='drive'?'drive':'walk');renderList(filtered())}
-function init(){map=L.map('map',{zoomControl:true,preferCanvas:true}).setView([KMU.lat,KMU.lng],15);baseLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);satLayer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles &copy; Esri'});map.createPane('timeRadiusPane');map.getPane('timeRadiusPane').style.zIndex=350;map.getPane('timeRadiusPane').style.pointerEvents='none';L.circle([BUSINESS_HALL.lat,BUSINESS_HALL.lng],{pane:'timeRadiusPane',radius:BUSINESS_HALL.radius,color:'#2563eb',weight:3,opacity:.9,fill:true,fillColor:'#3b82f6',fillOpacity:.14,interactive:false}).addTo(map).bindTooltip('국민대학교 경영관 기준 도보 30분 이내 반경(약 2.1km)',{permanent:false,direction:'top'});markers.addTo(map);routeLayer.addTo(map);bikeLayer.addTo(map);renderLegend();render();loadKakaoPlaces();loadBikeStations();setTimeout(()=>map.invalidateSize(),200)}
-document.getElementById('q').addEventListener('input',e=>{q=e.target.value;selected=null;render()});document.getElementById('searchBtn').onclick=()=>{selected=null;render()};document.getElementById('sort').onchange=()=>render();document.getElementById('allBtn').onclick=()=>{selected=null;filter='all';q='';document.getElementById('q').value='';render()};document.getElementById('close').onclick=()=>{selected=null;render()};document.getElementById('mapBtn').onclick=()=>{map.removeLayer(satLayer);baseLayer.addTo(map);mapBtn.classList.add('active');satBtn.classList.remove('active')};document.getElementById('satBtn').onclick=()=>{map.removeLayer(baseLayer);satLayer.addTo(map);satBtn.classList.add('active');mapBtn.classList.remove('active')};document.getElementById('walkMode').onclick=()=>drawRoute('walk');document.getElementById('driveMode').onclick=()=>drawRoute('drive');document.getElementById('bikeMode').onclick=()=>drawBikeInfo();window.addEventListener('resize',()=>setTimeout(()=>map.invalidateSize(),100));window.onload=init;
+function init(){map=L.map('map',{zoomControl:true,preferCanvas:true}).setView([KMU.lat,KMU.lng],15);baseLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);satLayer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles &copy; Esri'});map.createPane('timeRadiusPane');map.getPane('timeRadiusPane').style.zIndex=350;map.getPane('timeRadiusPane').style.pointerEvents='none';L.circle([BUSINESS_HALL.lat,BUSINESS_HALL.lng],{pane:'timeRadiusPane',radius:BUSINESS_HALL.radius,color:'#2563eb',weight:3,opacity:.9,fill:true,fillColor:'#3b82f6',fillOpacity:.14,interactive:false}).addTo(map).bindTooltip('국민대학교 경영관 기준 도보 30분 이내 반경(약 2.1km)',{permanent:false,direction:'top'});markers.addTo(map);routeLayer.addTo(map);bikeLayer.addTo(map);renderLegend();render();loadKakaoPlaces();loadBikeStations()}
+let qTimer;document.getElementById('q').addEventListener('input',e=>{clearTimeout(qTimer);qTimer=setTimeout(()=>{q=e.target.value;selected=null;render()},200)});document.getElementById('searchBtn').onclick=()=>{selected=null;render()};document.getElementById('sort').onchange=()=>render();document.getElementById('allBtn').onclick=()=>{selected=null;filter='all';q='';document.getElementById('q').value='';render()};document.getElementById('close').onclick=()=>{selected=null;render()};document.getElementById('mapBtn').onclick=()=>{map.removeLayer(satLayer);baseLayer.addTo(map);mapBtn.classList.add('active');satBtn.classList.remove('active')};document.getElementById('satBtn').onclick=()=>{map.removeLayer(baseLayer);satLayer.addTo(map);satBtn.classList.add('active');mapBtn.classList.remove('active')};document.getElementById('walkMode').onclick=()=>drawRoute('walk');document.getElementById('driveMode').onclick=()=>drawRoute('drive');document.getElementById('bikeMode').onclick=()=>drawBikeInfo();window.addEventListener('resize',()=>setTimeout(()=>map.invalidateSize(),100));window.onload=init;
 </script>
 </body>
 </html>
